@@ -1,0 +1,26 @@
+# Dependencias
+node_modules/
+
+# Cobertura de pruebas
+coverage/
+
+# Base de datos y respaldos (se generan en runtime)
+data/
+backups/
+*.db
+*.db-wal
+*.db-shm
+
+# Variables de entorno y secretos
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema operativo / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

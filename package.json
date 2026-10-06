@@ -1,0 +1,40 @@
+{
+  "name": "webapp",
+  "version": "1.0.0",
+  "description": "API REST con pipeline CI/CD (Docker + GitHub Actions + AWS EC2)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "jest --coverage --runInBand"
+  },
+  "keywords": [],
+  "author": "Sergio Abdiel Gonzalez Bravo",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "jest": "^30.5.2",
+    "supertest": "^7.3.1"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "collectCoverageFrom": [
+      "app.js",
+      "db.js"
+    ],
+    "coverageReporters": [
+      "text",
+      "lcov"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 70,
+        "functions": 70,
+        "lines": 70,
+        "statements": 70
+      }
+    }
+  }
+}
