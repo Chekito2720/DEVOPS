@@ -23,7 +23,7 @@ function parseId(raw) {
 app.get("/api/health", (req, res) => {
   ok(res, {
     status: "ok",
-    autor: "Karol Arvizu",
+    autor: "Sergio Abdiel Gonzalez Bravo",
     fecha: new Date().toISOString(),
   });
 });
