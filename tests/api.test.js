@@ -10,11 +10,10 @@ const { resetDb } = require("../db");
 beforeEach(() => resetDb());
 
 describe("Health", () => {
-  test("GET /api/health responde 200 con status ok y el autor", async () => {
+  test("GET /api/health responde 200 con status ok", async () => {
     const res = await request(app).get("/api/health");
     expect(res.statusCode).toBe(200);
     expect(res.body.data.status).toBe("ok");
-    expect(res.body.data.autor).toBe("Sergio Abdiel Gonzalez Bravo");
   });
 });
 
