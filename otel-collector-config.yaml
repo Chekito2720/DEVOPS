@@ -1,0 +1,70 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+  host_metrics:
+    root_path: /hostfs
+    collection_interval: 15s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
+      disk:
+      filesystem:
+      network:
+      load:
+
+extensions:
+  health_check:
+    endpoint: 127.0.0.1:13133
+    check_collector_pipeline:
+      enabled: true
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 200
+    spike_limit_mib: 50
+  batch:
+    send_batch_size: 1024
+    timeout: 10s
+
+exporters:
+  otlp_http/openobserve:
+    endpoint: http://localhost:5080/api/default
+    headers:
+      Authorization: "Basic ${env:OO_AUTH_B64}"
+      stream-name: default
+    sending_queue:
+      enabled: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 5m
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/openobserve]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/openobserve]
+    metrics:
+      receivers: [otlp, host_metrics]
+      processors: [memory_limiter, batch]
+      exporters: [otlp_http/openobserve]
+  telemetry:
+    logs:
+      level: info

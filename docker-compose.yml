@@ -1,0 +1,57 @@
+name: parcial2-cicd
+
+services:
+  api:
+    image: ${DOCKERHUB_USERNAME:?define DOCKERHUB_USERNAME}/webapp:${IMAGE_TAG:?define IMAGE_TAG}
+    container_name: api-cicd
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "6061:6061"
+    environment:
+      PORT: "80"
+      JWT_SECRET: ${JWT_SECRET:?define JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-2h}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@demo.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?define ADMIN_PASSWORD}
+      OTEL_SERVICE_NAME: api-cicd
+      APP_VERSION: ${APP_VERSION:-unknown}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://host.docker.internal:4318
+      OTEL_METRIC_EXPORT_INTERVAL: "15000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - api_data:/app/data
+    depends_on:
+      - otel-collector
+
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:v1.1.2
+    container_name: openobserve
+    restart: unless-stopped
+    ports:
+      - "5080:5080"
+    environment:
+      ZO_ROOT_USER_EMAIL: ${OO_USER:?define OO_USER}
+      ZO_ROOT_USER_PASSWORD: ${OO_PASS:?define OO_PASS}
+      ZO_DATA_DIR: /data
+    volumes:
+      - openobserve_data:/data
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.165.0
+    container_name: otel-collector
+    restart: unless-stopped
+    network_mode: host
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      OO_AUTH_B64: ${OO_AUTH_B64:?define OO_AUTH_B64}
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+      - /:/hostfs:ro,rslave
+    depends_on:
+      - openobserve
+
+volumes:
+  api_data:
+  openobserve_data:

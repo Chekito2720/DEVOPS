@@ -6,68 +6,210 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # 1) Tests + cobertura (corre en cada push y pull_request)
   test:
+    name: Pruebas unitarias y cobertura
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Descargar codigo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configurar Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
+          cache: npm
 
       - name: Instalar dependencias
         run: npm ci
 
-      - name: Ejecutar pruebas con cobertura (umbral 70%)
+      - name: Auditar dependencias
+        run: npm audit --audit-level=moderate
+
+      - name: Ejecutar Jest con cobertura (umbral 70%)
         run: npm test
 
-      - name: Resumen de cobertura en los logs
-        run: cat coverage/lcov.info || true
+      - name: Publicar reporte de cobertura
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: jest-coverage
+          path: coverage/
+          retention-days: 7
 
-  # 2) Build y publicacion de la imagen en Docker Hub (solo push a main)
-  build-and-push:
-    needs: test
-    if: github.event_name == 'push'
+  e2e:
+    name: Pruebas E2E con Playwright
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Descargar codigo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Login a Docker Hub (PAT)
-        uses: docker/login-action@v3
+      - name: Configurar Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Instalar Chromium y sus dependencias
+        run: npx playwright install --with-deps chromium
+
+      - name: Ejecutar pruebas de UI y API
+        run: npm run e2e
+
+      - name: Publicar reporte de Playwright
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  build-and-push:
+    name: Imagen Docker a Docker Hub
+    needs: [test, e2e]
+    if: ${{ github.event_name == 'push' && needs.test.result == 'success' && needs.e2e.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v7
+
+      - name: Configurar Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login a Docker Hub
+        uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Compilar y publicar imagen (:latest y :sha)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
+          build-args: |
+            APP_VERSION=${{ github.sha }}
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/webapp:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/webapp:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-  # 3) Despliegue continuo en AWS EC2 por SSH (solo push a main)
   deploy:
+    name: Despliegue en EC2
     needs: build-and-push
-    if: github.event_name == 'push'
+    if: ${{ github.event_name == 'push' && needs.build-and-push.result == 'success' }}
+    environment:
+      name: production
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - name: Desplegar en EC2 (zero downtime)
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Descargar codigo
+        uses: actions/checkout@v7
+
+      - name: Copiar configuracion de despliegue
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml,otel-collector-config.yaml"
+          target: "/home/ubuntu/app"
+
+      - name: Actualizar contenedores y verificar salud
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            docker pull ${{ secrets.DOCKERHUB_USERNAME }}/webapp:latest
-            docker stop api-cicd || true
-            docker rm api-cicd || true
-            docker run -d -p 80:80 --name api-cicd --restart always \
-              ${{ secrets.DOCKERHUB_USERNAME }}/webapp:latest
+            set -euo pipefail
+            cd ~/app
+            test -f .env
+            export IMAGE_TAG="${{ github.sha }}"
+            export APP_VERSION="${{ github.sha }}"
+            docker compose pull
+            docker compose up -d --remove-orphans
             docker image prune -f
+            for i in $(seq 1 60); do
+              HEALTH_RESPONSE=$(curl -fsS http://localhost/api/health 2>/dev/null || true)
+              if printf '%s' "$HEALTH_RESPONSE" | grep -q "\"version\":\"$APP_VERSION\"" \
+                && curl -fsS http://localhost:5080/healthz > /dev/null 2>&1 \
+                && curl -fsS http://localhost:13133/ > /dev/null 2>&1; then
+                echo "API, OpenObserve y Collector saludables"
+                docker compose ps
+                exit 0
+              fi
+              sleep 3
+            done
+            docker compose ps
+            docker compose logs --tail=100 api otel-collector openobserve
+            exit 1
+
+  report:
+    name: Registro en OpenObserve
+    needs: [test, e2e, build-and-push, deploy]
+    if: ${{ always() && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Enviar resultado del pipeline a OpenObserve
+        continue-on-error: true
+        env:
+          OO_URL: ${{ secrets.OPENOBSERVE_URL }}
+          OO_USER: ${{ secrets.OPENOBSERVE_USER }}
+          OO_PASS: ${{ secrets.OPENOBSERVE_PASSWORD }}
+          COMMIT: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          RUN_ID: ${{ github.run_id }}
+          TRIGGER: ${{ github.event_name }}
+          R_TEST: ${{ needs.test.result }}
+          R_E2E: ${{ needs.e2e.result }}
+          R_BUILD: ${{ needs['build-and-push'].result }}
+          R_DEPLOY: ${{ needs.deploy.result }}
+        run: |
+          set -o pipefail
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          jq -n \
+            --arg commit "$COMMIT" \
+            --arg branch "$BRANCH" \
+            --arg actor "$ACTOR" \
+            --arg run_id "$RUN_ID" \
+            --arg trigger "$TRIGGER" \
+            --arg timestamp "$TIMESTAMP" \
+            --arg r_test "$R_TEST" \
+            --arg r_e2e "$R_E2E" \
+            --arg r_build "$R_BUILD" \
+            --arg r_deploy "$R_DEPLOY" \
+            '[
+              {event:"unit_tests", status:$r_test},
+              {event:"e2e_tests", status:$r_e2e},
+              {event:"build_push", status:$r_build},
+              {event:"deploy", status:$r_deploy}
+            ] | map(. + {
+              commit:$commit,
+              branch:$branch,
+              actor:$actor,
+              run_id:$run_id,
+              trigger:$trigger,
+              timestamp:$timestamp
+            })' \
+            | curl -sS --fail-with-body --retry 2 \
+                -u "$OO_USER:$OO_PASS" \
+                -H "Content-Type: application/json" \
+                --data-binary @- \
+                "$OO_URL/api/default/ci_pipeline/_json"
