@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 const express = require("express");
 const path = require("path");
@@ -187,7 +187,7 @@ app.post("/api/auth/login", async (req, res) => {
       account: accountFingerprint(normalizedEmail),
       route: "/api/auth/login",
     });
-    return fail(req, res, 401, "Credenciales invalidas - DEMO A");
+    return fail(req, res, 401, "Credenciales invalidas");
   }
 
   clearAccountLoginFailures(normalizedEmail);
