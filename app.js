@@ -135,7 +135,7 @@ app.get("/api/health", (req, res) => {
     return ok(req, res, {
       status: "ok",
       version: process.env.APP_VERSION || "unknown",
-      autor: "Sergio Abdiel Gonzalez Bravo 2",
+      autor: "Sergio Abdiel Gonzalez Bravo 21",
       fecha: new Date().toISOString(),
     });
   } catch (error) {
